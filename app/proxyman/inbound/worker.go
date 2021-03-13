@@ -97,6 +97,8 @@ func (w *tcpWorker) callback(conn internet.Connection) {
 	if w.sniffingConfig != nil {
 		content.SniffingRequest.Enabled = w.sniffingConfig.Enabled
 		content.SniffingRequest.OverrideDestinationForProtocol = w.sniffingConfig.DestinationOverride
+		content.SniffingRequest.ExcludeForDomain = w.sniffingConfig.DomainsExcluded
+		content.SniffingRequest.MetadataOnly = w.sniffingConfig.MetadataOnly
 	}
 	ctx = session.ContextWithContent(ctx, content)
 
@@ -234,11 +236,15 @@ type udpWorker struct {
 	tag             string
 	stream          *internet.MemoryStreamConfig
 	dispatcher      routing.Dispatcher
+	sniffingConfig  *proxyman.SniffingConfig
 	uplinkCounter   stats.Counter
 	downlinkCounter stats.Counter
 
 	checker    *task.Periodic
 	activeConn map[connID]*udpConn
+
+	ctx  context.Context
+	cone bool
 }
 
 func (w *udpWorker) getConnection(id connID) (*udpConn, bool) {
@@ -279,7 +285,7 @@ func (w *udpWorker) callback(b *buf.Buffer, source net.Destination, originalDest
 		src: source,
 	}
 	if originalDest.IsValid() {
-		if !buf.Cone {
+		if !w.cone {
 			id.dest = originalDest
 		}
 		b.UDP = &originalDest
@@ -293,7 +299,7 @@ func (w *udpWorker) callback(b *buf.Buffer, source net.Destination, originalDest
 		common.Must(w.checker.Start())
 
 		go func() {
-			ctx := context.Background()
+			ctx := w.ctx
 			sid := session.NewID()
 			ctx = session.ContextWithID(ctx, sid)
 
@@ -307,6 +313,13 @@ func (w *udpWorker) callback(b *buf.Buffer, source net.Destination, originalDest
 				Gateway: net.UDPDestination(w.address, w.port),
 				Tag:     w.tag,
 			})
+			content := new(session.Content)
+			if w.sniffingConfig != nil {
+				content.SniffingRequest.Enabled = w.sniffingConfig.Enabled
+				content.SniffingRequest.OverrideDestinationForProtocol = w.sniffingConfig.DestinationOverride
+				content.SniffingRequest.MetadataOnly = w.sniffingConfig.MetadataOnly
+			}
+			ctx = session.ContextWithContent(ctx, content)
 			if err := w.proxy.Process(ctx, net.Network_UDP, conn, w.dispatcher); err != nil {
 				newError("connection ends").Base(err).WriteToLog(session.ExportIDToError(ctx))
 			}
@@ -339,7 +352,7 @@ func (w *udpWorker) clean() error {
 	}
 
 	for addr, conn := range w.activeConn {
-		if nowSec-atomic.LoadInt64(&conn.lastActivityTime) > 8 { // TODO Timeout too small
+		if nowSec-atomic.LoadInt64(&conn.lastActivityTime) > 300 {
 			delete(w.activeConn, addr)
 			conn.Close()
 		}
@@ -360,8 +373,10 @@ func (w *udpWorker) Start() error {
 		return err
 	}
 
+	w.cone = w.ctx.Value("cone").(bool)
+
 	w.checker = &task.Periodic{
-		Interval: time.Second * 16,
+		Interval: time.Minute,
 		Execute:  w.clean,
 	}
 
@@ -444,6 +459,8 @@ func (w *dsWorker) callback(conn internet.Connection) {
 	if w.sniffingConfig != nil {
 		content.SniffingRequest.Enabled = w.sniffingConfig.Enabled
 		content.SniffingRequest.OverrideDestinationForProtocol = w.sniffingConfig.DestinationOverride
+		content.SniffingRequest.ExcludeForDomain = w.sniffingConfig.DomainsExcluded
+		content.SniffingRequest.MetadataOnly = w.sniffingConfig.MetadataOnly
 	}
 	ctx = session.ContextWithContent(ctx, content)
 

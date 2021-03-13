@@ -153,9 +153,11 @@ func (h *DynamicInboundHandler) refresh() error {
 				address:         address,
 				port:            port,
 				dispatcher:      h.mux,
+				sniffingConfig:  h.receiverConfig.GetEffectiveSniffingSettings(),
 				uplinkCounter:   uplinkCounter,
 				downlinkCounter: downlinkCounter,
 				stream:          h.streamSettings,
+				ctx:             h.ctx,
 			}
 			if err := worker.Start(); err != nil {
 				newError("failed to create UDP worker").Base(err).AtWarning().WriteToLog()
