@@ -7,11 +7,11 @@ import (
 	"sync"
 
 	goxtls "github.com/xtls/go"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"github.com/xtls/xray-core/transport/internet/udp"
 	"github.com/xtls/xray-core/transport/internet/xtls"
@@ -134,7 +134,7 @@ func (l *Listener) OnReceive(payload *buf.Buffer, src net.Destination) {
 			Security: l.security,
 			Writer:   writer,
 		}, writer, l.config)
-		var netConn internet.Connection = conn
+		var netConn stat.Connection = conn
 		if l.tlsConfig != nil {
 			netConn = tls.Server(conn, l.tlsConfig)
 		} else if l.xtlsConfig != nil {

@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/miekg/dns"
-
 	"github.com/xtls/xray-core/app/dispatcher"
 	. "github.com/xtls/xray-core/app/dns"
 	"github.com/xtls/xray-core/app/policy"
@@ -22,8 +21,7 @@ import (
 	"github.com/xtls/xray-core/testing/servers/udp"
 )
 
-type staticHandler struct {
-}
+type staticHandler struct{}
 
 func (*staticHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	ans := new(dns.Msg)
@@ -101,8 +99,8 @@ func (*staticHandler) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			rr, _ := dns.NewRR("localhost-b. IN A 127.0.0.4")
 			ans.Answer = append(ans.Answer, rr)
 
-		case q.Name == "mijia\\ cloud." && q.Qtype == dns.TypeA:
-			rr, _ := dns.NewRR("mijia\\ cloud. IN A 127.0.0.1")
+		case q.Name == "Mijia\\ Cloud." && q.Qtype == dns.TypeA:
+			rr, _ := dns.NewRR("Mijia\\ Cloud. IN A 127.0.0.1")
 			ans.Answer = append(ans.Answer, rr)
 		}
 	}

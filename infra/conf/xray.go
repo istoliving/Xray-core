@@ -2,7 +2,7 @@ package conf
 
 import (
 	"encoding/json"
-	"github.com/xtls/xray-core/transport/internet"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -12,6 +12,7 @@ import (
 	"github.com/xtls/xray-core/app/stats"
 	"github.com/xtls/xray-core/common/serial"
 	core "github.com/xtls/xray-core/core"
+	"github.com/xtls/xray-core/transport/internet"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
@@ -29,6 +30,7 @@ var (
 
 	outboundConfigLoader = NewJSONConfigLoader(ConfigCreatorCache{
 		"blackhole":   func() interface{} { return new(BlackholeConfig) },
+		"loopback":    func() interface{} { return new(LoopbackConfig) },
 		"freedom":     func() interface{} { return new(FreedomConfig) },
 		"http":        func() interface{} { return new(HTTPClientConfig) },
 		"shadowsocks": func() interface{} { return new(ShadowsocksClientConfig) },
@@ -63,6 +65,7 @@ type SniffingConfig struct {
 	DestOverride    *StringList `json:"destOverride"`
 	DomainsExcluded *StringList `json:"domainsExcluded"`
 	MetadataOnly    bool        `json:"metadataOnly"`
+	RouteOnly       bool        `json:"routeOnly"`
 }
 
 // Build implements Buildable.
@@ -75,8 +78,12 @@ func (c *SniffingConfig) Build() (*proxyman.SniffingConfig, error) {
 				p = append(p, "http")
 			case "tls", "https", "ssl":
 				p = append(p, "tls")
+			case "quic":
+				p = append(p, "quic")
 			case "fakedns":
 				p = append(p, "fakedns")
+			case "fakedns+others":
+				p = append(p, "fakedns+others")
 			default:
 				return nil, newError("unknown protocol: ", protocol)
 			}
@@ -95,6 +102,7 @@ func (c *SniffingConfig) Build() (*proxyman.SniffingConfig, error) {
 		DestinationOverride: p,
 		DomainsExcluded:     d,
 		MetadataOnly:        c.MetadataOnly,
+		RouteOnly:           c.RouteOnly,
 	}, nil
 }
 
@@ -156,7 +164,7 @@ func (c *InboundDetourAllocationConfig) Build() (*proxyman.AllocationStrategy, e
 
 type InboundDetourConfig struct {
 	Protocol       string                         `json:"protocol"`
-	PortRange      *PortRange                     `json:"port"`
+	PortList       *PortList                      `json:"port"`
 	ListenOn       *Address                       `json:"listen"`
 	Settings       *json.RawMessage               `json:"settings"`
 	Tag            string                         `json:"tag"`
@@ -171,27 +179,27 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
 	receiverSettings := &proxyman.ReceiverConfig{}
 
 	if c.ListenOn == nil {
-		// Listen on anyip, must set PortRange
-		if c.PortRange == nil {
+		// Listen on anyip, must set PortList
+		if c.PortList == nil {
 			return nil, newError("Listen on AnyIP but no Port(s) set in InboundDetour.")
 		}
-		receiverSettings.PortRange = c.PortRange.Build()
+		receiverSettings.PortList = c.PortList.Build()
 	} else {
 		// Listen on specific IP or Unix Domain Socket
 		receiverSettings.Listen = c.ListenOn.Build()
 		listenDS := c.ListenOn.Family().IsDomain() && (c.ListenOn.Domain()[0] == '/' || c.ListenOn.Domain()[0] == '@')
 		listenIP := c.ListenOn.Family().IsIP() || (c.ListenOn.Family().IsDomain() && c.ListenOn.Domain() == "localhost")
 		if listenIP {
-			// Listen on specific IP, must set PortRange
-			if c.PortRange == nil {
+			// Listen on specific IP, must set PortList
+			if c.PortList == nil {
 				return nil, newError("Listen on specific ip without port in InboundDetour.")
 			}
 			// Listen on IP:Port
-			receiverSettings.PortRange = c.PortRange.Build()
+			receiverSettings.PortList = c.PortList.Build()
 		} else if listenDS {
-			if c.PortRange != nil {
-				// Listen on Unix Domain Socket, PortRange should be nil
-				receiverSettings.PortRange = nil
+			if c.PortList != nil {
+				// Listen on Unix Domain Socket, PortList should be nil
+				receiverSettings.PortList = nil
 			}
 		} else {
 			return nil, newError("unable to listen on domain address: ", c.ListenOn.Domain())
@@ -203,9 +211,17 @@ func (c *InboundDetourConfig) Build() (*core.InboundHandlerConfig, error) {
 		if c.Allocation.Concurrency != nil && c.Allocation.Strategy == "random" {
 			concurrency = int(*c.Allocation.Concurrency)
 		}
-		portRange := int(c.PortRange.To - c.PortRange.From + 1)
+		portRange := 0
+
+		for _, pr := range c.PortList.Range {
+			portRange += int(pr.To - pr.From + 1)
+		}
 		if concurrency >= 0 && concurrency >= portRange {
-			return nil, newError("not enough ports. concurrency = ", concurrency, " ports: ", c.PortRange.From, " - ", c.PortRange.To)
+			var ports strings.Builder
+			for _, pr := range c.PortList.Range {
+				fmt.Fprintf(&ports, "%d-%d ", pr.From, pr.To)
+			}
+			return nil, newError("not enough ports. concurrency = ", concurrency, " ports: ", ports.String())
 		}
 
 		as, err := c.Allocation.Build()
@@ -397,9 +413,11 @@ type Config struct {
 	Transport       *TransportConfig       `json:"transport"`
 	Policy          *PolicyConfig          `json:"policy"`
 	API             *APIConfig             `json:"api"`
+	Metrics         *MetricsConfig         `json:"metrics"`
 	Stats           *StatsConfig           `json:"stats"`
 	Reverse         *ReverseConfig         `json:"reverse"`
 	FakeDNS         *FakeDNSConfig         `json:"fakeDns"`
+	Observatory     *ObservatoryConfig     `json:"observatory"`
 }
 
 func (c *Config) findInboundTag(tag string) int {
@@ -446,6 +464,9 @@ func (c *Config) Override(o *Config, fn string) {
 	if o.API != nil {
 		c.API = o.API
 	}
+	if o.Metrics != nil {
+		c.Metrics = o.Metrics
+	}
 	if o.Stats != nil {
 		c.Stats = o.Stats
 	}
@@ -455,6 +476,10 @@ func (c *Config) Override(o *Config, fn string) {
 
 	if o.FakeDNS != nil {
 		c.FakeDNS = o.FakeDNS
+	}
+
+	if o.Observatory != nil {
+		c.Observatory = o.Observatory
 	}
 
 	// deprecated attrs... keep them for now
@@ -547,7 +572,13 @@ func (c *Config) Build() (*core.Config, error) {
 		}
 		config.App = append(config.App, serial.ToTypedMessage(apiConf))
 	}
-
+	if c.Metrics != nil {
+		metricsConf, err := c.Metrics.Build()
+		if err != nil {
+			return nil, err
+		}
+		config.App = append(config.App, serial.ToTypedMessage(metricsConf))
+	}
 	if c.Stats != nil {
 		statsConf, err := c.Stats.Build()
 		if err != nil {
@@ -603,6 +634,14 @@ func (c *Config) Build() (*core.Config, error) {
 		if err != nil {
 			return nil, err
 		}
+		config.App = append([]*serial.TypedMessage{serial.ToTypedMessage(r)}, config.App...)
+	}
+
+	if c.Observatory != nil {
+		r, err := c.Observatory.Build()
+		if err != nil {
+			return nil, err
+		}
 		config.App = append(config.App, serial.ToTypedMessage(r))
 	}
 
@@ -621,11 +660,11 @@ func (c *Config) Build() (*core.Config, error) {
 	}
 
 	// Backward compatibility.
-	if len(inbounds) > 0 && inbounds[0].PortRange == nil && c.Port > 0 {
-		inbounds[0].PortRange = &PortRange{
+	if len(inbounds) > 0 && inbounds[0].PortList == nil && c.Port > 0 {
+		inbounds[0].PortList = &PortList{[]PortRange{{
 			From: uint32(c.Port),
 			To:   uint32(c.Port),
-		}
+		}}}
 	}
 
 	for _, rawInboundConfig := range inbounds {

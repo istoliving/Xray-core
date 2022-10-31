@@ -2,6 +2,9 @@ package outbound
 
 import (
 	"context"
+	"errors"
+	"io"
+	"os"
 
 	"github.com/xtls/xray-core/app/proxyman"
 	"github.com/xtls/xray-core/common"
@@ -16,6 +19,7 @@ import (
 	"github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"github.com/xtls/xray-core/transport/pipe"
 )
@@ -57,7 +61,7 @@ type Handler struct {
 	downlinkCounter stats.Counter
 }
 
-// NewHandler create a new Handler based on the given configuration.
+// NewHandler creates a new Handler based on the given configuration.
 func NewHandler(ctx context.Context, config *core.OutboundHandlerConfig) (outbound.Handler, error) {
 	v := core.MustFromContext(ctx)
 	uplinkCounter, downlinkCounter := getStatCounter(v, config.Tag)
@@ -134,13 +138,23 @@ func (h *Handler) Tag() string {
 func (h *Handler) Dispatch(ctx context.Context, link *transport.Link) {
 	if h.mux != nil && (h.mux.Enabled || session.MuxPreferedFromContext(ctx)) {
 		if err := h.mux.Dispatch(ctx, link); err != nil {
-			newError("failed to process mux outbound traffic").Base(err).WriteToLog(session.ExportIDToError(ctx))
+			err := newError("failed to process mux outbound traffic").Base(err)
+			session.SubmitOutboundErrorToOriginator(ctx, err)
+			err.WriteToLog(session.ExportIDToError(ctx))
 			common.Interrupt(link.Writer)
 		}
 	} else {
-		if err := h.proxy.Process(ctx, link, h); err != nil {
+		err := h.proxy.Process(ctx, link, h)
+		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, context.Canceled) {
+				err = nil
+			}
+		}
+		if err != nil {
 			// Ensure outbound ray is properly closed.
-			newError("failed to process outbound traffic").Base(err).WriteToLog(session.ExportIDToError(ctx))
+			err := newError("failed to process outbound traffic").Base(err)
+			session.SubmitOutboundErrorToOriginator(ctx, err)
+			err.WriteToLog(session.ExportIDToError(ctx))
 			common.Interrupt(link.Writer)
 		} else {
 			common.Must(common.Close(link.Writer))
@@ -158,7 +172,7 @@ func (h *Handler) Address() net.Address {
 }
 
 // Dial implements internet.Dialer.
-func (h *Handler) Dial(ctx context.Context, dest net.Destination) (internet.Connection, error) {
+func (h *Handler) Dial(ctx context.Context, dest net.Destination) (stat.Connection, error) {
 	if h.senderSettings != nil {
 		if h.senderSettings.ProxySettings.HasTag() {
 			tag := h.senderSettings.ProxySettings.Tag
@@ -197,13 +211,17 @@ func (h *Handler) Dial(ctx context.Context, dest net.Destination) (internet.Conn
 		}
 	}
 
+	if conn, err := h.getUoTConnection(ctx, dest); err != os.ErrInvalid {
+		return conn, err
+	}
+
 	conn, err := internet.Dial(ctx, dest, h.streamSettings)
 	return h.getStatCouterConnection(conn), err
 }
 
-func (h *Handler) getStatCouterConnection(conn internet.Connection) internet.Connection {
+func (h *Handler) getStatCouterConnection(conn stat.Connection) stat.Connection {
 	if h.uplinkCounter != nil || h.downlinkCounter != nil {
-		return &internet.StatCouterConnection{
+		return &stat.CounterConnection{
 			Connection:   conn,
 			ReadCounter:  h.downlinkCounter,
 			WriteCounter: h.uplinkCounter,

@@ -15,7 +15,7 @@ import (
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
 	"github.com/xtls/xray-core/features/stats"
-	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
@@ -298,19 +298,19 @@ func ReadV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, c
 				if sctx != nil {
 					if inbound := session.InboundFromContext(sctx); inbound != nil && inbound.Conn != nil {
 						iConn := inbound.Conn
-						statConn, ok := iConn.(*internet.StatCouterConnection)
+						statConn, ok := iConn.(*stat.CounterConnection)
 						if ok {
 							iConn = statConn.Connection
 						}
 						if xc, ok := iConn.(*xtls.Conn); ok {
-							iConn = xc.Connection
+							iConn = xc.NetConn()
 						}
 						if tc, ok := iConn.(*net.TCPConn); ok {
 							if conn.SHOW {
 								fmt.Println(conn.MARK, "Splice")
 							}
 							runtime.Gosched() // necessary
-							w, err := tc.ReadFrom(conn.Connection)
+							w, err := tc.ReadFrom(conn.NetConn())
 							if counter != nil {
 								counter.Add(w)
 							}
@@ -322,10 +322,10 @@ func ReadV(reader buf.Reader, writer buf.Writer, timer signal.ActivityUpdater, c
 							panic("XTLS Splice: not TCP inbound")
 						}
 					} else {
-						//panic("XTLS Splice: nil inbound or nil inbound.Conn")
+						// panic("XTLS Splice: nil inbound or nil inbound.Conn")
 					}
 				}
-				reader = buf.NewReadVReader(conn.Connection, rawConn)
+				reader = buf.NewReadVReader(conn.NetConn(), rawConn, nil)
 				ct = counter
 				if conn.SHOW {
 					fmt.Println(conn.MARK, "ReadV")

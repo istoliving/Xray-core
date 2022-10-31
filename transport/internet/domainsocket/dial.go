@@ -1,5 +1,5 @@
-// +build !windows
-// +build !wasm
+//go:build !windows && !wasm
+// +build !windows,!wasm
 
 package domainsocket
 
@@ -9,11 +9,12 @@ import (
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
-func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (internet.Connection, error) {
+func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	settings := streamSettings.ProtocolSettings.(*Config)
 	addr, err := settings.GetUnixAddr()
 	if err != nil {

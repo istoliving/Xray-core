@@ -1,6 +1,10 @@
 package session
 
-import "context"
+import (
+	"context"
+
+	"github.com/xtls/xray-core/features/routing"
+)
 
 type sessionKey int
 
@@ -11,6 +15,8 @@ const (
 	contentSessionKey
 	muxPreferedSessionKey
 	sockoptSessionKey
+	trackedConnectionErrorKey
+	dispatcherKey
 )
 
 // ContextWithID returns a new context with the given ID.
@@ -81,6 +87,47 @@ func ContextWithSockopt(ctx context.Context, s *Sockopt) context.Context {
 func SockoptFromContext(ctx context.Context) *Sockopt {
 	if sockopt, ok := ctx.Value(sockoptSessionKey).(*Sockopt); ok {
 		return sockopt
+	}
+	return nil
+}
+
+func GetForcedOutboundTagFromContext(ctx context.Context) string {
+	if ContentFromContext(ctx) == nil {
+		return ""
+	}
+	return ContentFromContext(ctx).Attribute("forcedOutboundTag")
+}
+
+func SetForcedOutboundTagToContext(ctx context.Context, tag string) context.Context {
+	if contentFromContext := ContentFromContext(ctx); contentFromContext == nil {
+		ctx = ContextWithContent(ctx, &Content{})
+	}
+	ContentFromContext(ctx).SetAttribute("forcedOutboundTag", tag)
+	return ctx
+}
+
+type TrackedRequestErrorFeedback interface {
+	SubmitError(err error)
+}
+
+func SubmitOutboundErrorToOriginator(ctx context.Context, err error) {
+	if errorTracker := ctx.Value(trackedConnectionErrorKey); errorTracker != nil {
+		errorTracker := errorTracker.(TrackedRequestErrorFeedback)
+		errorTracker.SubmitError(err)
+	}
+}
+
+func TrackedConnectionError(ctx context.Context, tracker TrackedRequestErrorFeedback) context.Context {
+	return context.WithValue(ctx, trackedConnectionErrorKey, tracker)
+}
+
+func ContextWithDispatcher(ctx context.Context, dispatcher routing.Dispatcher) context.Context {
+	return context.WithValue(ctx, dispatcherKey, dispatcher)
+}
+
+func DispatcherFromContext(ctx context.Context) routing.Dispatcher {
+	if dispatcher, ok := ctx.Value(dispatcherKey).(routing.Dispatcher); ok {
+		return dispatcher
 	}
 	return nil
 }

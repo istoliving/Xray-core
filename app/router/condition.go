@@ -3,12 +3,11 @@ package router
 import (
 	"strings"
 
-	"go.starlark.net/starlark"
-	"go.starlark.net/syntax"
-
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/strmatcher"
 	"github.com/xtls/xray-core/features/routing"
+	"go.starlark.net/starlark"
+	"go.starlark.net/syntax"
 )
 
 type Condition interface {
@@ -66,6 +65,24 @@ type DomainMatcher struct {
 	matchers strmatcher.IndexMatcher
 }
 
+func NewMphMatcherGroup(domains []*Domain) (*DomainMatcher, error) {
+	g := strmatcher.NewMphMatcherGroup()
+	for _, d := range domains {
+		matcherType, f := matcherTypeMap[d.Type]
+		if !f {
+			return nil, newError("unsupported domain type", d.Type)
+		}
+		_, err := g.AddPattern(d.Value, matcherType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	g.Build()
+	return &DomainMatcher{
+		matchers: g,
+	}, nil
+}
+
 func NewDomainMatcher(domains []*Domain) (*DomainMatcher, error) {
 	g := new(strmatcher.MatcherGroup)
 	for _, d := range domains {
@@ -82,7 +99,7 @@ func NewDomainMatcher(domains []*Domain) (*DomainMatcher, error) {
 }
 
 func (m *DomainMatcher) ApplyDomain(domain string) bool {
-	return len(m.matchers.Match(domain)) > 0
+	return len(m.matchers.Match(strings.ToLower(domain))) > 0
 }
 
 // Apply implements Condition.
@@ -91,7 +108,7 @@ func (m *DomainMatcher) Apply(ctx routing.Context) bool {
 	if len(domain) == 0 {
 		return false
 	}
-	return m.ApplyDomain(strings.ToLower(domain))
+	return m.ApplyDomain(domain)
 }
 
 type MultiGeoIPMatcher struct {

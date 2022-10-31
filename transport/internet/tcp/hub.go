@@ -7,11 +7,11 @@ import (
 	"time"
 
 	goxtls "github.com/xtls/go"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
@@ -38,11 +38,11 @@ func ListenTCP(ctx context.Context, address net.Address, port net.Port, streamSe
 		if streamSettings.SocketSettings == nil {
 			streamSettings.SocketSettings = &internet.SocketConfig{}
 		}
-		streamSettings.SocketSettings.AcceptProxyProtocol = l.config.AcceptProxyProtocol
+		streamSettings.SocketSettings.AcceptProxyProtocol = l.config.AcceptProxyProtocol || streamSettings.SocketSettings.AcceptProxyProtocol
 	}
 	var listener net.Listener
 	var err error
-	if port == net.Port(0) { //unix
+	if port == net.Port(0) { // unix
 		listener, err = internet.ListenSystem(ctx, &net.UnixAddr{
 			Name: address.Domain(),
 			Net:  "unix",
@@ -119,7 +119,7 @@ func (v *Listener) keepAccepting() {
 			conn = v.authConfig.Server(conn)
 		}
 
-		v.addConn(internet.Connection(conn))
+		v.addConn(stat.Connection(conn))
 	}
 }
 

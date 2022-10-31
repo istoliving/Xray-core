@@ -2,11 +2,10 @@ package udp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync"
 	"time"
-
-	"github.com/xtls/xray-core/common/signal/done"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
@@ -14,6 +13,7 @@ import (
 	"github.com/xtls/xray-core/common/protocol/udp"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/common/signal"
+	"github.com/xtls/xray-core/common/signal/done"
 	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
 )
@@ -108,7 +108,9 @@ func handleInput(ctx context.Context, conn *connEntry, dest net.Destination, cal
 
 		mb, err := input.ReadMultiBuffer()
 		if err != nil {
-			newError("failed to handle UDP input").Base(err).WriteToLog(session.ExportIDToError(ctx))
+			if !errors.Is(err, io.EOF) {
+				newError("failed to handle UDP input").Base(err).WriteToLog(session.ExportIDToError(ctx))
+			}
 			return
 		}
 		timer.Update()

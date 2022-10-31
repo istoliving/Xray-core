@@ -1,14 +1,17 @@
 package websocket
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
+	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	http_proto "github.com/xtls/xray-core/common/protocol/http"
@@ -21,6 +24,8 @@ type requestHandler struct {
 	path string
 	ln   *Listener
 }
+
+var replacer = strings.NewReplacer("+", "-", "/", "_", "=", "")
 
 var upgrader = &websocket.Upgrader{
 	ReadBufferSize:   4 * 1024,
@@ -36,7 +41,17 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		writer.WriteHeader(http.StatusNotFound)
 		return
 	}
-	conn, err := upgrader.Upgrade(writer, request, nil)
+
+	var extraReader io.Reader
+	responseHeader := http.Header{}
+	if str := request.Header.Get("Sec-WebSocket-Protocol"); str != "" {
+		if ed, err := base64.RawURLEncoding.DecodeString(replacer.Replace(str)); err == nil && len(ed) > 0 {
+			extraReader = bytes.NewReader(ed)
+			responseHeader.Set("Sec-WebSocket-Protocol", str)
+		}
+	}
+
+	conn, err := upgrader.Upgrade(writer, request, responseHeader)
 	if err != nil {
 		newError("failed to convert to WebSocket connection").Base(err).WriteToLog()
 		return
@@ -51,7 +66,7 @@ func (h *requestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		}
 	}
 
-	h.ln.addConn(newConnection(conn, remoteAddr))
+	h.ln.addConn(newConnection(conn, remoteAddr, extraReader))
 }
 
 type Listener struct {
@@ -73,11 +88,11 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 		if streamSettings.SocketSettings == nil {
 			streamSettings.SocketSettings = &internet.SocketConfig{}
 		}
-		streamSettings.SocketSettings.AcceptProxyProtocol = l.config.AcceptProxyProtocol
+		streamSettings.SocketSettings.AcceptProxyProtocol = l.config.AcceptProxyProtocol || streamSettings.SocketSettings.AcceptProxyProtocol
 	}
 	var listener net.Listener
 	var err error
-	if port == net.Port(0) { //unix
+	if port == net.Port(0) { // unix
 		listener, err = internet.ListenSystem(ctx, &net.UnixAddr{
 			Name: address.Domain(),
 			Net:  "unix",
@@ -90,7 +105,7 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 		if locker != nil {
 			l.locker = locker.(*internet.FileLocker)
 		}
-	} else { //tcp
+	} else { // tcp
 		listener, err = internet.ListenSystem(ctx, &net.TCPAddr{
 			IP:   address.IP(),
 			Port: int(port),
@@ -119,7 +134,7 @@ func ListenWS(ctx context.Context, address net.Address, port net.Port, streamSet
 			ln:   l,
 		},
 		ReadHeaderTimeout: time.Second * 4,
-		MaxHeaderBytes:    2048,
+		MaxHeaderBytes:    4096,
 	}
 
 	go func() {

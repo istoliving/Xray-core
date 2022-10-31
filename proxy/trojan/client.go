@@ -20,6 +20,7 @@ import (
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/xtls"
 )
 
@@ -61,7 +62,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	network := destination.Network
 
 	var server *protocol.ServerSpec
-	var conn internet.Connection
+	var conn stat.Connection
 
 	err := retry.ExponentialBackoff(5, 100).On(func() error {
 		server = c.serverPicker.PickServer()
@@ -76,12 +77,12 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 	if err != nil {
 		return newError("failed to find an available destination").AtWarning().Base(err)
 	}
-	newError("tunneling request to ", destination, " via ", server.Destination()).WriteToLog(session.ExportIDToError(ctx))
+	newError("tunneling request to ", destination, " via ", server.Destination().NetAddr()).WriteToLog(session.ExportIDToError(ctx))
 
 	defer conn.Close()
 
 	iConn := conn
-	statConn, ok := iConn.(*internet.StatCouterConnection)
+	statConn, ok := iConn.(*stat.CounterConnection)
 	if ok {
 		iConn = statConn.Connection
 	}
@@ -125,7 +126,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 				}
 				if connWriter.Flow == XRD {
 					xtlsConn.DirectMode = true
-					if sc, ok := xtlsConn.Connection.(syscall.Conn); ok {
+					if sc, ok := xtlsConn.NetConn().(syscall.Conn); ok {
 						rawConn, _ = sc.SyscallConn()
 					}
 				}
@@ -202,7 +203,7 @@ func (c *Client) Process(ctx context.Context, link *transport.Link, dialer inter
 		return buf.Copy(reader, link.Writer, buf.UpdateActivity(timer))
 	}
 
-	var responseDoneAndCloseWriter = task.OnSuccess(getResponse, task.Close(link.Writer))
+	responseDoneAndCloseWriter := task.OnSuccess(getResponse, task.Close(link.Writer))
 	if err := task.Run(ctx, postRequest, responseDoneAndCloseWriter); err != nil {
 		return newError("connection ends").Base(err)
 	}

@@ -1,5 +1,5 @@
-// +build !windows
-// +build !wasm
+//go:build !windows && !wasm
+// +build !windows,!wasm
 
 package domainsocket
 
@@ -10,13 +10,13 @@ import (
 	"strings"
 
 	goxtls "github.com/xtls/go"
-	"golang.org/x/sys/unix"
-
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"github.com/xtls/xray-core/transport/internet/xtls"
+	"golang.org/x/sys/unix"
 )
 
 type Listener struct {
@@ -98,7 +98,7 @@ func (ln *Listener) run() {
 			conn = xtls.Server(conn, ln.xtlsConfig)
 		}
 
-		ln.addConn(internet.Connection(conn))
+		ln.addConn(stat.Connection(conn))
 	}
 }
 

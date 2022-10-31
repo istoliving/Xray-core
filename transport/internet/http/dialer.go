@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
@@ -13,25 +14,38 @@ import (
 	"github.com/xtls/xray-core/common/net/cnc"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 	"github.com/xtls/xray-core/transport/internet/tls"
 	"github.com/xtls/xray-core/transport/pipe"
 	"golang.org/x/net/http2"
 )
 
+type dialerConf struct {
+	net.Destination
+	*internet.MemoryStreamConfig
+}
+
 var (
-	globalDialerMap    map[net.Destination]*http.Client
+	globalDialerMap    map[dialerConf]*http.Client
 	globalDialerAccess sync.Mutex
 )
 
-func getHTTPClient(ctx context.Context, dest net.Destination, tlsSettings *tls.Config, sockopt *internet.SocketConfig) (*http.Client, error) {
+func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (*http.Client, error) {
 	globalDialerAccess.Lock()
 	defer globalDialerAccess.Unlock()
 
 	if globalDialerMap == nil {
-		globalDialerMap = make(map[net.Destination]*http.Client)
+		globalDialerMap = make(map[dialerConf]*http.Client)
 	}
 
-	if client, found := globalDialerMap[dest]; found {
+	httpSettings := streamSettings.ProtocolSettings.(*Config)
+	tlsConfigs := tls.ConfigFromStreamSettings(streamSettings)
+	if tlsConfigs == nil {
+		return nil, newError("TLS must be enabled for http transport.").AtWarning()
+	}
+	sockopt := streamSettings.SocketSettings
+
+	if client, found := globalDialerMap[dialerConf{dest, streamSettings}]; found {
 		return client, nil
 	}
 
@@ -60,7 +74,12 @@ func getHTTPClient(ctx context.Context, dest net.Destination, tlsSettings *tls.C
 				return nil, err
 			}
 
-			cn := gotls.Client(pconn, tlsConfig)
+			var cn tls.Interface
+			if fingerprint, ok := tls.Fingerprints[tlsConfigs.Fingerprint]; ok {
+				cn = tls.UClient(pconn, tlsConfig, fingerprint).(*tls.UConn)
+			} else {
+				cn = tls.Client(pconn, tlsConfig).(*tls.Conn)
+			}
 			if err := cn.Handshake(); err != nil {
 				newError("failed to dial to " + addr).Base(err).AtError().WriteToLog()
 				return nil, err
@@ -71,34 +90,35 @@ func getHTTPClient(ctx context.Context, dest net.Destination, tlsSettings *tls.C
 					return nil, err
 				}
 			}
-			state := cn.ConnectionState()
-			if p := state.NegotiatedProtocol; p != http2.NextProtoTLS {
-				return nil, newError("http2: unexpected ALPN protocol " + p + "; want q" + http2.NextProtoTLS).AtError()
+			negotiatedProtocol, negotiatedProtocolIsMutual := cn.NegotiatedProtocol()
+			if negotiatedProtocol != http2.NextProtoTLS {
+				return nil, newError("http2: unexpected ALPN protocol " + negotiatedProtocol + "; want q" + http2.NextProtoTLS).AtError()
 			}
-			if !state.NegotiatedProtocolIsMutual {
+			if !negotiatedProtocolIsMutual {
 				return nil, newError("http2: could not negotiate protocol mutually").AtError()
 			}
 			return cn, nil
 		},
-		TLSClientConfig: tlsSettings.GetTLSConfig(tls.WithDestination(dest)),
+		TLSClientConfig: tlsConfigs.GetTLSConfig(tls.WithDestination(dest)),
+	}
+
+	if httpSettings.IdleTimeout > 0 || httpSettings.HealthCheckTimeout > 0 {
+		transport.ReadIdleTimeout = time.Second * time.Duration(httpSettings.IdleTimeout)
+		transport.PingTimeout = time.Second * time.Duration(httpSettings.HealthCheckTimeout)
 	}
 
 	client := &http.Client{
 		Transport: transport,
 	}
 
-	globalDialerMap[dest] = client
+	globalDialerMap[dialerConf{dest, streamSettings}] = client
 	return client, nil
 }
 
 // Dial dials a new TCP connection to the given destination.
-func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (internet.Connection, error) {
+func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (stat.Connection, error) {
 	httpSettings := streamSettings.ProtocolSettings.(*Config)
-	tlsConfig := tls.ConfigFromStreamSettings(streamSettings)
-	if tlsConfig == nil {
-		return nil, newError("TLS must be enabled for http transport.").AtWarning()
-	}
-	client, err := getHTTPClient(ctx, dest, tlsConfig, streamSettings.SocketSettings)
+	client, err := getHTTPClient(ctx, dest, streamSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +126,22 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 	opts := pipe.OptionsFromContext(ctx)
 	preader, pwriter := pipe.New(opts...)
 	breader := &buf.BufferedReader{Reader: preader}
+
+	httpMethod := "PUT"
+	if httpSettings.Method != "" {
+		httpMethod = httpSettings.Method
+	}
+
+	httpHeaders := make(http.Header)
+
+	for _, httpHeader := range httpSettings.Header {
+		for _, httpHeaderValue := range httpHeader.Value {
+			httpHeaders.Set(httpHeader.Name, httpHeaderValue)
+		}
+	}
+
 	request := &http.Request{
-		Method: "PUT",
+		Method: httpMethod,
 		Host:   httpSettings.getRandomHost(),
 		Body:   breader,
 		URL: &url.URL{
@@ -118,7 +152,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		Proto:      "HTTP/2",
 		ProtoMajor: 2,
 		ProtoMinor: 0,
-		Header:     make(http.Header),
+		Header:     httpHeaders,
 	}
 	// Disable any compression method from server.
 	request.Header.Set("Accept-Encoding", "identity")

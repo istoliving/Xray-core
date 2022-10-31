@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -11,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"github.com/xtls/xray-core/common/cmdarg"
@@ -31,7 +31,7 @@ Xray. Multiple assign is accepted.
 The -confdir=dir flag sets a dir with multiple json config
 
 The -format=json flag sets the format of config files. 
-Default "json".
+Default "auto".
 
 The -test flag tells Xray to test config files only, 
 without launching the server
@@ -39,20 +39,19 @@ without launching the server
 }
 
 func init() {
-	cmdRun.Run = executeRun //break init loop
+	cmdRun.Run = executeRun // break init loop
 }
 
 var (
 	configFiles cmdarg.Arg // "Config file for Xray.", the option is customed type, parse in main
 	configDir   string
 	test        = cmdRun.Flag.Bool("test", false, "Test config file only, without launching Xray server.")
-	format      = cmdRun.Flag.String("format", "json", "Format of input file.")
+	format      = cmdRun.Flag.String("format", "auto", "Format of input file.")
 
 	/* We have to do this here because Golang's Test will also need to parse flag, before
 	 * main func in this file is run.
 	 */
 	_ = func() bool {
-
 		cmdRun.Flag.Var(&configFiles, "config", "Config path for Xray.")
 		cmdRun.Flag.Var(&configFiles, "c", "Short alias of -config")
 		cmdRun.Flag.StringVar(&configDir, "confdir", "", "A dir with multiple json config")
@@ -111,13 +110,26 @@ func dirExists(file string) bool {
 	return err == nil && info.IsDir()
 }
 
+func getRegepxByFormat() string {
+	switch strings.ToLower(*format) {
+	case "json":
+		return `^.+\.json$`
+	case "toml":
+		return `^.+\.toml$`
+	case "yaml", "yml":
+		return `^.+\.(yaml|yml)$`
+	default:
+		return `^.+\.(json|toml|yaml|yml)$`
+	}
+}
+
 func readConfDir(dirPath string) {
-	confs, err := ioutil.ReadDir(dirPath)
+	confs, err := os.ReadDir(dirPath)
 	if err != nil {
 		log.Fatalln(err)
 	}
 	for _, f := range confs {
-		matched, err := regexp.MatchString(`^.+\.(json|toml|yaml|yml)$`, f.Name())
+		matched, err := regexp.MatchString(getRegepxByFormat(), f.Name())
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -160,7 +172,7 @@ func getConfigFilePath() cmdarg.Arg {
 func getConfigFormat() string {
 	f := core.GetFormatByExtension(*format)
 	if f == "" {
-		f = "json"
+		f = "auto"
 	}
 	return f
 }
@@ -168,10 +180,9 @@ func getConfigFormat() string {
 func startXray() (core.Server, error) {
 	configFiles := getConfigFilePath()
 
-	//config, err := core.LoadConfig(getConfigFormat(), configFiles[0], configFiles)
+	// config, err := core.LoadConfig(getConfigFormat(), configFiles[0], configFiles)
 
 	c, err := core.LoadConfig(getConfigFormat(), configFiles)
-
 	if err != nil {
 		return nil, newError("failed to load config files: [", configFiles.String(), "]").Base(err)
 	}

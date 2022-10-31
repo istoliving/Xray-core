@@ -20,8 +20,10 @@ func (h *SniffHeader) Domain() string {
 	return h.domain
 }
 
-var errNotTLS = errors.New("not TLS header")
-var errNotClientHello = errors.New("not client hello")
+var (
+	errNotTLS         = errors.New("not TLS header")
+	errNotClientHello = errors.New("not client hello")
+)
 
 func IsValidTLSVersion(major, minor byte) bool {
 	return major == 3
@@ -102,7 +104,7 @@ func ReadClientHello(data []byte, h *SniffHeader) error {
 					return errNotClientHello
 				}
 				if nameType == 0 {
-					serverName := strings.ToLower(string(d[:nameLen]))
+					serverName := string(d[:nameLen])
 					// An SNI value may not include a
 					// trailing dot. See
 					// https://tools.ietf.org/html/rfc6066#section-3.

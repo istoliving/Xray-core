@@ -20,6 +20,7 @@ import (
 	"github.com/xtls/xray-core/features/stats"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/internet"
+	"github.com/xtls/xray-core/transport/internet/stat"
 )
 
 func init() {
@@ -121,7 +122,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 	input := link.Reader
 	output := link.Writer
 
-	var conn internet.Connection
+	var conn stat.Connection
 	err := retry.ExponentialBackoff(5, 100).On(func() error {
 		dialDest := destination
 		if h.config.useIP() && dialDest.Address.Family().IsDomain() {
@@ -194,7 +195,7 @@ func (h *Handler) Process(ctx context.Context, link *transport.Link, dialer inte
 
 func NewPacketReader(conn net.Conn, UDPOverride net.Destination) buf.Reader {
 	iConn := conn
-	statConn, ok := iConn.(*internet.StatCouterConnection)
+	statConn, ok := iConn.(*stat.CounterConnection)
 	if ok {
 		iConn = statConn.Connection
 	}
@@ -238,7 +239,7 @@ func (r *PacketReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 
 func NewPacketWriter(conn net.Conn, h *Handler, ctx context.Context, UDPOverride net.Destination) buf.Writer {
 	iConn := conn
-	statConn, ok := iConn.(*internet.StatCouterConnection)
+	statConn, ok := iConn.(*stat.CounterConnection)
 	if ok {
 		iConn = statConn.Connection
 	}
