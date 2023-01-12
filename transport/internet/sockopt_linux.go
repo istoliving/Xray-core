@@ -46,6 +46,12 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
 			return newError("failed to set SO_MARK").Base(err)
 		}
 	}
+	
+	if  config.Interface != "" {
+                if err := syscall.BindToDevice(int(fd), config.Interface); err != nil {
+                        return newError("failed to set Interface").Base(err)
+                }
+        }
 
 	if isTCPSocket(network) {
 		tfo := config.ParseTFOValue()
@@ -78,11 +84,11 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
 			}
 		}
 
-                if config.TcpCongestion != "" {
-                        if err := syscall.SetsockoptString(int(fd), syscall.SOL_TCP, syscall.TCP_CONGESTION, config.TcpCongestion); err != nil {
-                                return newError("failed to set TCP_CONGESTION", err)
-                        }
-                }
+		if config.TcpCongestion != "" {
+			if err := syscall.SetsockoptString(int(fd), syscall.SOL_TCP, syscall.TCP_CONGESTION, config.TcpCongestion); err != nil {
+				return newError("failed to set TCP_CONGESTION", err)
+			}
+		}
 	}
 
 	if config.Tproxy.IsEnabled() {
@@ -128,11 +134,11 @@ func applyInboundSocketOptions(network string, fd uintptr, config *SocketConfig)
 			}
 		}
 
-                if config.TcpCongestion != "" {
-                        if err := syscall.SetsockoptString(int(fd), syscall.SOL_TCP, syscall.TCP_CONGESTION, config.TcpCongestion); err != nil {
-                                return newError("failed to set TCP_CONGESTION", err)
-                        }
-                }
+		if config.TcpCongestion != "" {
+			if err := syscall.SetsockoptString(int(fd), syscall.SOL_TCP, syscall.TCP_CONGESTION, config.TcpCongestion); err != nil {
+				return newError("failed to set TCP_CONGESTION", err)
+			}
+		}
 	}
 
 	if config.Tproxy.IsEnabled() {
